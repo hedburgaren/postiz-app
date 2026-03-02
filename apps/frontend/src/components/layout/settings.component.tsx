@@ -28,6 +28,7 @@ import { Webhooks } from '@gitroom/frontend/components/webhooks/webhooks';
 import { Sets } from '@gitroom/frontend/components/sets/sets';
 import { SignaturesComponent } from '@gitroom/frontend/components/settings/signatures.component';
 import { Autopost } from '@gitroom/frontend/components/autopost/autopost';
+import { BrandsComponent } from '@gitroom/frontend/components/settings/brands.component';
 import { useT } from '@gitroom/react/translation/get.transation.service.client';
 import { SVGLine } from '@gitroom/frontend/components/launches/launches.component';
 import { GlobalSettings } from '@gitroom/frontend/components/settings/global.settings';
@@ -86,6 +87,7 @@ export const SettingsPopup: FC<{
   const list = useMemo(() => {
     const arr = [];
     arr.push({ tab: 'global_settings', label: t('global_settings', 'Global Settings') });
+    arr.push({ tab: 'brands', label: t('brands', 'Brands') });
     // Populate tabs based on user permissions
     if (user?.tier?.team_members && isGeneral) {
       arr.push({ tab: 'teams', label: t('teams', 'Teams') });
@@ -161,6 +163,11 @@ export const SettingsPopup: FC<{
               {tab === 'global_settings' && (
                 <div>
                   <GlobalSettings />
+                </div>
+              )}
+              {tab === 'brands' && (
+                <div>
+                  <BrandsComponent />
                 </div>
               )}
               {tab === 'teams' && !!user?.tier?.team_members && isGeneral && (
