@@ -95,6 +95,42 @@ model AiProvider {
   @@index([isDefault])
 }
 
+model PromptVersion {
+  id             String       @id @default(uuid())
+  brandId        String
+  field          String
+  content        String       @db.Text
+  version        Int          @default(1)
+  changedBy      String?
+  createdAt      DateTime     @default(now())
+
+  @@index([brandId])
+  @@index([brandId, field])
+  @@index([createdAt])
+}
+
+model PostFeedback {
+  id             String       @id @default(uuid())
+  organizationId String
+  postId         String
+  brandId        String?
+  rating         Int          @default(0)
+  flaggedAsGood  Boolean      @default(false)
+  platform       String?
+  engagement     Int          @default(0)
+  reach          Int          @default(0)
+  clicks         Int          @default(0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([organizationId, postId])
+  @@index([organizationId])
+  @@index([brandId])
+  @@index([flaggedAsGood])
+  @@index([platform])
+  @@index([createdAt])
+}
+
 model Tags {
   id           String       @id @default(uuid())
   name         String
