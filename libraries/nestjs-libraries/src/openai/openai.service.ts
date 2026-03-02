@@ -63,24 +63,41 @@ export class OpenaiService {
     return { client: fallbackOpenai, model: 'gpt-4.1' };
   }
 
+  private static readonly ANTI_AI_FINGERPRINT = `
+CRITICAL WRITING RULES — follow these strictly to produce natural, human-sounding text:
+- Vary sentence length dramatically: mix 3-word punches with 25-word flowing sentences.
+- Never open with "In today's", "In the world of", "Are you looking for", "It's important to note", or any generic AI opener.
+- Use concrete numbers, names, and specifics instead of vague qualifiers ("increased 34%" not "significantly improved").
+- Include industry jargon and colloquialisms appropriate for the audience.
+- Occasionally use incomplete sentences. Or one-word paragraphs. Works great.
+- Avoid these AI-telltale words: utilize, leverage, landscape, navigate, elevate, delve, foster, robust, streamline, seamless, cutting-edge, game-changer, holistic, synergy.
+- Start some sentences with "And", "But", "So", or "Look,".
+- Use contractions naturally (don't, won't, it's, we're).
+- Add a light personal opinion or mild controversy when appropriate — AI text is always safely neutral.
+- Never use more than one exclamation mark in the entire text.
+- Keep hashtags to max 3-5, placed naturally, not dumped at the end.`;
+
   private async getBrandContext(orgId?: string, brandId?: string): Promise<string> {
-    if (!orgId) return '';
+    if (!orgId) return OpenaiService.ANTI_AI_FINGERPRINT;
     try {
       const brand = brandId
         ? await this._brandService.getBrandById(orgId, brandId)
         : await this._brandService.getDefaultBrand(orgId);
-      if (!brand) return '';
 
-      const parts: string[] = [];
-      if (brand.voicePrompt) parts.push(`Brand voice: ${brand.voicePrompt}`);
-      if (brand.languageRules) parts.push(`Language rules: ${brand.languageRules}`);
-      if (brand.forbiddenWords) parts.push(`Forbidden words (never use): ${brand.forbiddenWords}`);
-      if (brand.examplePosts) parts.push(`Example posts for reference:\n${brand.examplePosts}`);
-      if (brand.hashtagGroups) parts.push(`Hashtag groups: ${brand.hashtagGroups}`);
-      if (brand.defaultLanguage) parts.push(`Default language: ${brand.defaultLanguage}`);
-      return parts.length > 0 ? `\n\nBrand guidelines:\n${parts.join('\n')}` : '';
+      const parts: string[] = [OpenaiService.ANTI_AI_FINGERPRINT];
+
+      if (brand) {
+        if (brand.voicePrompt) parts.push(`Brand voice: ${brand.voicePrompt}`);
+        if (brand.languageRules) parts.push(`Language rules: ${brand.languageRules}`);
+        if (brand.forbiddenWords) parts.push(`Forbidden words (never use these in addition to the AI-telltale words above): ${brand.forbiddenWords}`);
+        if (brand.examplePosts) parts.push(`Example posts to match this style:\n${brand.examplePosts}`);
+        if (brand.hashtagGroups) parts.push(`Approved hashtag groups: ${brand.hashtagGroups}`);
+        if (brand.defaultLanguage) parts.push(`Write in language: ${brand.defaultLanguage}`);
+      }
+
+      return `\n\n${parts.join('\n')}`;
     } catch (e) {
-      return '';
+      return OpenaiService.ANTI_AI_FINGERPRINT;
     }
   }
 
@@ -343,5 +360,87 @@ export class OpenaiService {
     }
 
     return [];
+  }
+
+  async generateBlogPost(topic: string, orgId?: string, brandId?: string) {
+    const { client, model } = await this.getClient(orgId);
+    const brandContext = await this.getBrandContext(orgId, brandId);
+
+    const BlogPostSchema = z.object({
+      title: z.string(),
+      metaDescription: z.string().max(160),
+      content: z.string(),
+      tags: z.array(z.string()).max(5),
+    });
+
+    for (let i = 0; i < 3; i++) {
+      try {
+        const result = await client.chat.completions.parse({
+          model,
+          messages: [
+            {
+              role: 'system',
+              content: `You are an expert content writer. Write a long-form blog post (800-1500 words) in Markdown format.
+Structure: compelling title, meta description (max 160 chars), well-structured body with H2/H3 headings, and 3-5 relevant tags.
+The body should have an engaging intro, 3-5 sections with subheadings, and a conclusion with a call to action.
+Use short paragraphs (2-3 sentences max). Include bullet points or numbered lists where appropriate.${brandContext}`,
+            },
+            {
+              role: 'user',
+              content: `Write a blog post about: ${topic}`,
+            },
+          ],
+          response_format: zodResponseFormat(BlogPostSchema, 'blogPost'),
+        });
+
+        return result.choices[0].message.parsed;
+      } catch (err) {
+        this.logger.warn(`Blog post generation attempt ${i + 1} failed`);
+      }
+    }
+
+    return null;
+  }
+
+  async repurposeContent(content: string, platforms: string[], orgId?: string, brandId?: string) {
+    const { client, model } = await this.getClient(orgId);
+    const brandContext = await this.getBrandContext(orgId, brandId);
+
+    const RepurposedSchema = z.object({
+      posts: z.array(z.object({
+        platform: z.string(),
+        content: z.string(),
+        hashtags: z.array(z.string()).max(5),
+      })),
+    });
+
+    try {
+      const result = await client.chat.completions.parse({
+        model,
+        messages: [
+          {
+            role: 'system',
+            content: `You are a social media expert. Take a long-form article and create unique, platform-optimized posts for each requested platform.
+Each post should have a different angle/hook — never just shorten the same text.
+Platform rules:
+- X/Twitter: max 280 chars, punchy, conversational
+- LinkedIn: professional, 1-3 short paragraphs, end with a question or CTA
+- Facebook: casual, relatable, slightly longer
+- Instagram: visual-first caption, line breaks for readability, hashtags natural
+- Threads: conversational, thread-friendly${brandContext}`,
+          },
+          {
+            role: 'user',
+            content: `Create posts for these platforms: ${platforms.join(', ')}\n\nSource content:\n${content}`,
+          },
+        ],
+        response_format: zodResponseFormat(RepurposedSchema, 'repurposed'),
+      });
+
+      return result.choices[0].message.parsed;
+    } catch (err) {
+      this.logger.warn('Content repurposing failed');
+      return null;
+    }
   }
 }
