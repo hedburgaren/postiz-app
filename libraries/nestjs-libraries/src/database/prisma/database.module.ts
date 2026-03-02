@@ -36,6 +36,10 @@ import { ThirdPartyService } from '@gitroom/nestjs-libraries/database/prisma/thi
 import { VideoManager } from '@gitroom/nestjs-libraries/videos/video.manager';
 import { FalService } from '@gitroom/nestjs-libraries/openai/fal.service';
 import { RefreshIntegrationService } from '@gitroom/nestjs-libraries/integrations/refresh.integration.service';
+import { BrandRepository } from '@gitroom/nestjs-libraries/database/prisma/brands/brand.repository';
+import { BrandService } from '@gitroom/nestjs-libraries/database/prisma/brands/brand.service';
+import { AiProviderRepository } from '@gitroom/nestjs-libraries/database/prisma/brands/ai-provider.repository';
+import { AiProviderService } from '@gitroom/nestjs-libraries/database/prisma/brands/ai-provider.service';
 
 @Global()
 @Module({
@@ -81,6 +85,10 @@ import { RefreshIntegrationService } from '@gitroom/nestjs-libraries/integration
     ThirdPartyRepository,
     ThirdPartyService,
     VideoManager,
+    BrandRepository,
+    BrandService,
+    AiProviderRepository,
+    AiProviderService,
   ],
   get exports() {
     return this.providers;

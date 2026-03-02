@@ -41,10 +41,58 @@ model Organization {
   usedCodes         UsedCodes[]
   users             UserOrganization[]
   webhooks          Webhooks[]
+  brands            Brand[]
+  aiProviders       AiProvider[]
 
   @@index([apiKey])
   @@index([streakSince])
   @@index([paymentId])
+}
+
+model Brand {
+  id                String       @id @default(uuid())
+  organizationId    String
+  name              String
+  voicePrompt       String?      @db.Text
+  languageRules     String?      @db.Text
+  forbiddenWords    String?      @db.Text
+  hashtagGroups     String?      @db.Text
+  examplePosts      String?      @db.Text
+  primaryColor      String?
+  secondaryColor    String?
+  defaultLanguage   String       @default("sv")
+  allowedLanguages  String       @default("[\"sv\",\"en\"]")
+  approvalRequired  Boolean      @default(false)
+  isDefault         Boolean      @default(false)
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  deletedAt         DateTime?
+  organization      Organization @relation(fields: [organizationId], references: [id])
+
+  @@unique([organizationId, name, deletedAt])
+  @@index([organizationId])
+  @@index([deletedAt])
+  @@index([isDefault])
+}
+
+model AiProvider {
+  id             String       @id @default(uuid())
+  organizationId String
+  name           String
+  providerType   AiProviderType @default(OPENAI)
+  apiKey         String
+  baseUrl        String?
+  isDefault      Boolean      @default(false)
+  models         String       @default("{}")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  deletedAt      DateTime?
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  @@unique([organizationId, name, deletedAt])
+  @@index([organizationId])
+  @@index([deletedAt])
+  @@index([isDefault])
 }
 
 model Tags {
@@ -892,4 +940,12 @@ enum ShortLinkPreference {
   ASK
   YES
   NO
+}
+
+enum AiProviderType {
+  OPENAI
+  GROQ
+  ANTHROPIC
+  OLLAMA
+  CUSTOM
 }

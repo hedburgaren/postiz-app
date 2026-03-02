@@ -1,12 +1,27 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import OpenAI from 'openai';
 import { shuffle } from 'lodash';
 import { zodResponseFormat } from 'openai/helpers/zod';
 import { z } from 'zod';
+import { AiProviderService } from '@gitroom/nestjs-libraries/database/prisma/brands/ai-provider.service';
+import { BrandService } from '@gitroom/nestjs-libraries/database/prisma/brands/brand.service';
 
-const openai = new OpenAI({
+const fallbackOpenai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || 'sk-proj-',
 });
+
+const PROVIDER_BASE_URLS: Record<string, string> = {
+  GROQ: 'https://api.groq.com/openai/v1',
+  OLLAMA: 'http://host.docker.internal:11434/v1',
+};
+
+const DEFAULT_MODELS: Record<string, string> = {
+  OPENAI: 'gpt-4.1',
+  GROQ: 'llama-3.3-70b-versatile',
+  ANTHROPIC: 'claude-sonnet-4-20250514',
+  OLLAMA: 'llama3',
+  CUSTOM: 'gpt-4.1',
+};
 
 const PicturePrompt = z.object({
   prompt: z.string(),
@@ -18,9 +33,61 @@ const VoicePrompt = z.object({
 
 @Injectable()
 export class OpenaiService {
-  async generateImage(prompt: string, isUrl: boolean, isVertical = false) {
+  private readonly logger = new Logger(OpenaiService.name);
+
+  constructor(
+    private _aiProviderService: AiProviderService,
+    private _brandService: BrandService
+  ) {}
+
+  private async getClient(orgId?: string): Promise<{ client: OpenAI; model: string }> {
+    if (orgId) {
+      try {
+        const provider = await this._aiProviderService.getDefaultProvider(orgId);
+        if (provider) {
+          const baseURL = provider.baseUrl || PROVIDER_BASE_URLS[provider.providerType];
+          const models = provider.models ? JSON.parse(provider.models) : {};
+          const model = models.default || DEFAULT_MODELS[provider.providerType] || 'gpt-4.1';
+          return {
+            client: new OpenAI({
+              apiKey: provider.apiKey,
+              ...(baseURL ? { baseURL } : {}),
+            }),
+            model,
+          };
+        }
+      } catch (e) {
+        this.logger.warn('Failed to load AI provider from DB, falling back to env');
+      }
+    }
+    return { client: fallbackOpenai, model: 'gpt-4.1' };
+  }
+
+  private async getBrandContext(orgId?: string, brandId?: string): Promise<string> {
+    if (!orgId) return '';
+    try {
+      const brand = brandId
+        ? await this._brandService.getBrandById(orgId, brandId)
+        : await this._brandService.getDefaultBrand(orgId);
+      if (!brand) return '';
+
+      const parts: string[] = [];
+      if (brand.voicePrompt) parts.push(`Brand voice: ${brand.voicePrompt}`);
+      if (brand.languageRules) parts.push(`Language rules: ${brand.languageRules}`);
+      if (brand.forbiddenWords) parts.push(`Forbidden words (never use): ${brand.forbiddenWords}`);
+      if (brand.examplePosts) parts.push(`Example posts for reference:\n${brand.examplePosts}`);
+      if (brand.hashtagGroups) parts.push(`Hashtag groups: ${brand.hashtagGroups}`);
+      if (brand.defaultLanguage) parts.push(`Default language: ${brand.defaultLanguage}`);
+      return parts.length > 0 ? `\n\nBrand guidelines:\n${parts.join('\n')}` : '';
+    } catch (e) {
+      return '';
+    }
+  }
+
+  async generateImage(prompt: string, isUrl: boolean, isVertical = false, orgId?: string) {
+    const { client } = await this.getClient(orgId);
     const generate = (
-      await openai.images.generate({
+      await client.images.generate({
         prompt,
         response_format: isUrl ? 'url' : 'b64_json',
         model: 'dall-e-3',
@@ -31,11 +98,12 @@ export class OpenaiService {
     return isUrl ? generate.url : generate.b64_json;
   }
 
-  async generatePromptForPicture(prompt: string) {
+  async generatePromptForPicture(prompt: string, orgId?: string) {
+    const { client, model } = await this.getClient(orgId);
     return (
       (
-        await openai.chat.completions.parse({
-          model: 'gpt-4.1',
+        await client.chat.completions.parse({
+          model,
           messages: [
             {
               role: 'system',
@@ -52,11 +120,12 @@ export class OpenaiService {
     );
   }
 
-  async generateVoiceFromText(prompt: string) {
+  async generateVoiceFromText(prompt: string, orgId?: string) {
+    const { client, model } = await this.getClient(orgId);
     return (
       (
-        await openai.chat.completions.parse({
-          model: 'gpt-4.1',
+        await client.chat.completions.parse({
+          model,
           messages: [
             {
               role: 'system',
@@ -73,15 +142,18 @@ export class OpenaiService {
     );
   }
 
-  async generatePosts(content: string) {
+  async generatePosts(content: string, orgId?: string, brandId?: string) {
+    const { client, model } = await this.getClient(orgId);
+    const brandContext = await this.getBrandContext(orgId, brandId);
+
     const posts = (
       await Promise.all([
-        openai.chat.completions.create({
+        client.chat.completions.create({
           messages: [
             {
               role: 'assistant',
               content:
-                'Generate a Twitter post from the content without emojis in the following JSON format: { "post": string } put it in an array with one element',
+                'Generate a Twitter post from the content without emojis in the following JSON format: { "post": string } put it in an array with one element' + brandContext,
             },
             {
               role: 'user',
@@ -90,14 +162,14 @@ export class OpenaiService {
           ],
           n: 5,
           temperature: 1,
-          model: 'gpt-4.1',
+          model,
         }),
-        openai.chat.completions.create({
+        client.chat.completions.create({
           messages: [
             {
               role: 'assistant',
               content:
-                'Generate a thread for social media in the following JSON format: Array<{ "post": string }> without emojis',
+                'Generate a thread for social media in the following JSON format: Array<{ "post": string }> without emojis' + brandContext,
             },
             {
               role: 'user',
@@ -106,7 +178,7 @@ export class OpenaiService {
           ],
           n: 5,
           temperature: 1,
-          model: 'gpt-4.1',
+          model,
         }),
       ])
     ).flatMap((p) => p.choices);
@@ -131,8 +203,9 @@ export class OpenaiService {
       })
     );
   }
-  async extractWebsiteText(content: string) {
-    const websiteContent = await openai.chat.completions.create({
+  async extractWebsiteText(content: string, orgId?: string, brandId?: string) {
+    const { client, model } = await this.getClient(orgId);
+    const websiteContent = await client.chat.completions.create({
       messages: [
         {
           role: 'assistant',
@@ -144,15 +217,17 @@ export class OpenaiService {
           content,
         },
       ],
-      model: 'gpt-4.1',
+      model,
     });
 
     const { content: articleContent } = websiteContent.choices[0].message;
 
-    return this.generatePosts(articleContent!);
+    return this.generatePosts(articleContent!, orgId, brandId);
   }
 
-  async separatePosts(content: string, len: number) {
+  async separatePosts(content: string, len: number, orgId?: string) {
+    const { client, model } = await this.getClient(orgId);
+
     const SeparatePostsPrompt = z.object({
       posts: z.array(z.string()),
     });
@@ -163,8 +238,8 @@ export class OpenaiService {
 
     const posts =
       (
-        await openai.chat.completions.parse({
-          model: 'gpt-4.1',
+        await client.chat.completions.parse({
+          model,
           messages: [
             {
               role: 'system',
@@ -196,8 +271,8 @@ export class OpenaiService {
             try {
               return (
                 (
-                  await openai.chat.completions.parse({
-                    model: 'gpt-4.1',
+                  await client.chat.completions.parse({
+                    model,
                     messages: [
                       {
                         role: 'system',
@@ -226,14 +301,15 @@ export class OpenaiService {
     };
   }
 
-  async generateSlidesFromText(text: string) {
+  async generateSlidesFromText(text: string, orgId?: string) {
+    const { client, model } = await this.getClient(orgId);
     for (let i = 0; i < 3; i++) {
       try {
         const message = `You are an assistant that takes a text and break it into slides, each slide should have an image prompt and voice text to be later used to generate a video and voice, image prompt should capture the essence of the slide and also have a back dark gradient on top, image prompt should not contain text in the picture, generate between 3-5 slides maximum`;
         const parse =
           (
-            await openai.chat.completions.parse({
-              model: 'gpt-4.1',
+            await client.chat.completions.parse({
+              model,
               messages: [
                 {
                   role: 'system',
